@@ -1,4 +1,5 @@
 use thiserror::Error;
+use tokio::sync::watch::error;
 
 #[derive(Error, Debug)]
 pub enum TxEngineErrors {
@@ -24,11 +25,13 @@ pub enum TxEngineErrors {
     /// In such case, the program would simply fail the trasaction and continue
     #[error("Invalid Input")]
     InvalidInput,
-    /// !NOTE: Assumption: Account should be locked if a Dispute claim is made on 
+    /// Assumption: Account should be locked if a Dispute claim is made on 
     /// Withdraw Transaction, since the money is already psiphoned out of the
     /// account.
     #[error("Account locked due to chargeback/dispute on withdraw")]
     ClientAccountLocked,
+    #[error("Withdraw Transaction cannot be disputed")]
+    WithdrawDisputeError,
     #[error("unknown error")]
     Unknown,
 }

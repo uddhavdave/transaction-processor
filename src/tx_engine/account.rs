@@ -1,101 +1,58 @@
-use anyhow::Result;
+use anyhow::Result as Result;
+use rust_decimal::Decimal;
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::collections::hash_map::Entry;
 use super::errors::TxEngineErrors;
-use rust_decimal::Decimal;
-use super::io_types::{OutputColumns, InputColumns};
+use super::transaction::*;
 
-pub type ClientId = u16;
-
-pub type TxId = u32;
-pub type Amount = Decimal;
-pub type Statement = (Amount, Amount, Amount, bool);
-
-#[derive(Debug, PartialEq)]
-pub enum TxType {
-    Deposit,
-    Withdraw,
-    Dispute,
-    Resolve,
-    Chargeback,
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub struct Statement {
+    pub total: Amount,
+    pub available: Amount, 
+    pub held: Amount,
+    pub locked: bool,
 }
 
-struct Dispute(TxId);
-struct Resolve(TxId);
-struct Chargeback(TxId);
-
-impl FromStr for TxType {
-    type Err = TxEngineErrors;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "deposit" => Ok(TxType::Deposit),
-            "withdrawal" => Ok(TxType::Withdraw),
-            "dispute" => Ok(TxType::Dispute),
-            "resolve" => Ok(TxType::Resolve),
-            "chargeback" => Ok(TxType::Chargeback),
-            _ => Err(TxEngineErrors::Unknown)
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct Transaction {
-    pub tx_id: TxId,
-    pub tx_type: TxType,
-    pub amount: Option<Amount>,
-}
-
-impl From<InputColumns> for Transaction {
-    fn from(input: InputColumns) -> Self {
-        Transaction {
-            tx_id: input.transaction_id,
-            // !PANICS: following conversion can cause panic if the transaction
-            // type is not known
-            tx_type: TxType::from_str(&input.transaction_type).expect("Malformed Data"),
-            amount: input.amount
-        }
-    }
-}
-
-impl Transaction {
-    pub fn new(tx_id: TxId, tx_type: TxType, amount: Option<Amount>) -> Self {
-        Transaction {
-            tx_id,
-            tx_type,
-            amount
-        }
-    }
-
-    pub fn is_disputed(&self) -> bool {
-        if self.tx_type == TxType::Dispute {
-            true
-        } else {
-            false
-        }
+impl Statement {
+    pub fn new(total: Amount, available: Amount, held: Amount, locked: bool) -> Self {
+        Statement { total, available, held, locked }
     }
 }
 
 #[derive(Default, Debug)]
-pub struct AccountState {
-    locked: bool,
-    total: Amount,
-    held: Amount,
-    available: Amount,
-    history: HashMap<TxId, Transaction>
+pub struct Account {
+    pub total: Amount,
+    pub held: Amount,
+    pub available: Amount,
+    pub history: HashMap<TxId, Transaction>,
+    pub locked: bool,
 }
 
-impl AccountState {
-    pub fn new() -> Self {
-        AccountState::default()
+impl Account {
+    pub fn get_statement(&self) -> Result<Statement> {
+        Ok(
+            Statement {
+                total: self.total.round_dp(4),
+                available: self.available.round_dp(4),
+                locked: self.locked,
+                held: self.held.round_dp(4),
+            }
+        )
     }
 
     pub fn is_locked(&self) -> bool {
         self.locked
     }
 
+    pub fn new() -> Self {
+        Account { locked: false, total: Decimal::new(0, 4), held: Decimal::new(0, 4), available: Decimal::new(0, 4), history: HashMap::new() }
+    }
+
     pub fn add_transaction(&mut self, tx: Transaction) ->  Result<()> {
+        if self.is_locked() {
+            return Err(TxEngineErrors::ClientAccountLocked.into());
+        }
+
         match tx.tx_type {
             TxType::Deposit => {
                 if let Some(amount) = tx.amount {
@@ -147,10 +104,6 @@ impl AccountState {
         Ok(())
     }
 
-    pub fn get_statement(&self) -> Statement {
-        (self.total, self.held, self.available, self.locked)
-    }
-
     fn handle_dispute(&mut self, disputed_tx_id: TxId) -> Result<()> {
         match self.history.entry(disputed_tx_id) {
             Entry::Occupied(mut entry) => {
@@ -160,6 +113,14 @@ impl AccountState {
                     return Err(TxEngineErrors::TxAlreadyDisputed(disputed_tx_id).into())
                 }
 
+                if disputed_tx.tx_type == TxType::Withdraw {
+                    // ASSUMPTION:
+                    // Currently we assume that a Withdraw cannot be disputed,
+                    // as handling the transaction is outside of the scope of
+                    // program. However, we should lock the account in this case
+                    self.locked = true;
+                    return Err(TxEngineErrors::WithdrawDisputeError.into())
+                }
                 // SAFE UNWRAP: Transaction amount ensured while
                 // inserting entry in history
                 let disputed_amount = disputed_tx.amount.unwrap();
@@ -222,15 +183,83 @@ impl AccountState {
 
                 self.held -= disputed_amount;
                 self.total -= disputed_amount;
+                self.locked = true;
 
                 disputed_tx.tx_type = TxType::Chargeback;
-
-                self.locked = true;
             }
             Entry::Vacant(_) => {
                 return Err(TxEngineErrors::TxDoesNotExist(disputed_tx_id).into())
             }
         };
         Ok(())
+    }
+}
+
+macro_rules! add_transaction {
+    ($acc:tt, $txid:tt, $txtype:ident, $($amt:tt)?) => {
+        $acc.add_transaction(Transaction::new($txid, TxType::$txtype, Some(dec!($($amt)?)))).unwrap();
+    };
+    ($acc:tt, $txid:tt, $txtype:ident) => {
+        $acc.add_transaction(Transaction::new($txid, TxType::$txtype, None)).unwrap();
+    }
+}
+
+mod tests {
+    use rust_decimal::prelude::FromPrimitive;
+    use rust_decimal_macros::dec;
+    use crate::tx_engine::account;
+
+    use super::*;
+
+    #[test]
+    fn test_dispute() -> Result<()>{
+        let mut account = Account::new();
+        add_transaction!(account, 1, Deposit, 10.0);
+        assert_eq!(account.get_statement()?, Statement::new(dec!(10.0), dec!(10.0), dec!(0), false ));
+        add_transaction!(account, 1, Dispute);
+        assert_eq!(account.get_statement()?, Statement::new(dec!(10.0), dec!(0.0), dec!(10.0), false ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_chargeback() -> Result<()> {
+        let mut account = Account::new();
+        add_transaction!(account, 1, Deposit, 10.0);
+        add_transaction!(account, 1, Dispute);
+        add_transaction!(account, 1, Chargeback);
+        assert_eq!(account.get_statement()?, Statement::new(dec!(0), dec!(0), dec!(0), true));
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve() -> Result<()> {
+        let mut account = Account::new();
+        add_transaction!(account, 1, Deposit, 10.0);
+        add_transaction!(account, 1, Dispute);
+        add_transaction!(account, 1, Resolve);
+        assert_eq!(account.get_statement()?, Statement::new(dec!(10), dec!(10), dec!(0), false));
+        Ok(())
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_insufficient_funds() {
+        let mut acc = Account::new();
+        add_transaction!(acc, 1, Deposit, 4);
+        // Should panic below because of wrap call
+        add_transaction!(acc, 2, Withdraw, 10);
+
+        // If transaction was added then check balance is not less than 0
+        assert_eq!(acc.get_statement().unwrap(), Statement::new(dec!(4), dec!(4), dec!(0), false));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_withdraw_dispute() {
+        let mut acc = Account::new();
+        add_transaction!(acc, 1, Deposit, 5);
+        add_transaction!(acc, 3, Withdraw, 5);
+        // Should panic below because Withdraw transaction cannot be disputed
+        add_transaction!(acc, 3, Dispute);
     }
 }

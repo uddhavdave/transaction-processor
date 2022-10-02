@@ -1,54 +1,15 @@
-use super::account::*;
-use super::errors::TxEngineErrors;
-use super::io_types::OutputColumns;
-use std::collections::HashMap;
-use anyhow::Result;
+use anyhow::Result as Result;
+use super::{transaction::Transaction, account::Statement};
 
-/// Cache stores the Transactions against ClientId
-/// ClientId is used as key here since its `u16`
-///
-/// Value against the `ClientId` is the State of the account
-pub struct ClientCache {
-    pub store: HashMap<ClientId, AccountState>
-}
+pub type ClientId = u16;
 
-impl ClientCache {
-    pub fn new() -> Self {
-        ClientCache { store: HashMap::new() }
-    }
-
-    /// This function processes a single transaction for an account
-    /// It checks for the account status (locked/Unlocked)
-    /// Assuming Locked accounts, cannot be operated on it skips processing the transaction
-    pub fn process_raw_transaction(&mut self, client: ClientId, tx: Transaction) -> Result<()> {
-        // If the client is not present then create one and proceed with adding
-        // Transaction
-        let client_account = self.store
-            .entry(client)
-            .or_insert_with(|| AccountState::new());
-        if client_account.is_locked() {
-            return Err(TxEngineErrors::ClientAccountLocked.into());
-        }
-
-        client_account.add_transaction(tx)
-    }
-
-    /// This function returns an owned iterator, which consumes `store`
-    /// 
-    /// All `AccountState` initialize with Default values
-    /// In case, the Client Cache is populated, Iterator returns `None`
-    pub fn drain_account_statements(self) -> impl Iterator<Item=OutputColumns> {
-        self.store
-            .into_iter()
-            .map( |(client, account)| {
-                    let (total, held, available, locked) = account.get_statement();
-                    OutputColumns {
-                        client_id: client,
-                        available_amount: available,
-                        held_amount: held,
-                        total,
-                        locked
-                    }
-                })
-    }
+/// ['AccountStore'] defines the behaviour of the interface which is used for
+/// storing account data and modifying it.
+/// It is generic over structures which implement [`Into<Transaction>`], needed
+/// for adding the data in client's account.
+/// Users are expected to receive data in [`Statement`]
+pub trait AccountStore <I: Into<Transaction>> {
+    fn add_transaction_to_client_account(&mut self, client_id: ClientId, input_data: I) -> Result<()>;
+    fn get_client_account_statement(&self, client_id: ClientId) -> Result<Statement>;
+    fn get_clients_list(&self) -> Result<Vec<ClientId>>;
 }

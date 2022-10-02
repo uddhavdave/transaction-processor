@@ -10,7 +10,7 @@ dispute,    3,      7
 chargeback, 3,      7
 deposit,    4,      8,  100.00015
 dispute,    4,      8
-deposit,    5,      9,  1.7976931348623157e+308
+deposit,    5,      9,  1.797693134862315730
 deposit,    5,      10,  5.0
 deposit,    6,      11,  15.024
 withdrawal, 6,      12,  10.53

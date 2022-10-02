@@ -12,4 +12,6 @@ tokio = { version = "1" , features = ["full"] }
 itertools = "0.10.4"
 clap = { version = "3.2.22", features = ["derive"] }
 futures = "0.3"
-rust_decimal = { version = "1.26.1", features = ["serde-with-float"]}
+rust_decimal = { version = "1.26.1", features = ["serde-with-str", "serde-with-float"]}
+rust_decimal_macros = "1.26"
+serde_test = "1.0"
