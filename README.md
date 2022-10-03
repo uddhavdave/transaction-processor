@@ -7,18 +7,18 @@ Library exposes a `AccountStore` trait which can be used to implement the accoun
 keep track of Clients and Transaction history, giving it the flexibility to work
 with any Cache implementation.
 
-A cache is already implemented in [`client_store.rs`](./client_store.rs) which is
+A cache is already implemented in [`client_store.rs`](./src/client_store.rs) which is
 uses hashmap to store the Transactions per client. Transaction ID being a u32 type
 is not suitable for a Key, hence optimal key choice is client ID which is u16,
 ensuring far less collisions if tested against large dataset.
 
-Errors and defined in [`errors.rs`](./tx_engine/errors.rs) which uses ThisError crate
+Errors and defined in [`errors.rs`](./src/tx_engine/errors.rs) which uses ThisError crate
 to simplify the Describing errors. The Library also depends heavily in `anyhow` crate
 to club different errors which implement `Error` trait. `clap` crate is used to 
 parse the command line arguments.
 
 Program expects the input csv to be deserilaized to `InputColumns` which is defined
-in [`io_types.rs`] which also contains the output format of the program defined in
+in [`io_types.rs`](./src/tx_engine/io_types.rs) which also contains the output format of the program defined in
 `OutputColumns`. Both these structs use serde attributes to guide de/serialization
 of data. A custom attribute macro is used for decimal serializing.
 
